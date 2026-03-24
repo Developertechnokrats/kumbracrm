@@ -7,19 +7,27 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+function getRequiredEnv(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) {
+    throw new Error(`Missing ${name} secret`);
+  }
+  return value;
+}
+
 const COMPANY_CONFIGS = {
   sentra: {
-    apiKey: Deno.env.get("SENDGRID_API_KEY_SENTRA"),
+    apiKey: getRequiredEnv("SENDGRID_API_KEY_SENTRA"),
     fromEmail: "daniel.cavanaugh@sentra.capital",
     fromName: "Sentra Capital",
-    companyName: "sentra"
+    companyName: "sentra",
   },
   kumbra: {
-    apiKey: Deno.env.get("SENDGRID_API_KEY_KUMBRA"),
+    apiKey: getRequiredEnv("SENDGRID_API_KEY_KUMBRA"),
     fromEmail: "daniel.cavanaugh@kumbracapital.com",
     fromName: "Kumbra Capital",
-    companyName: "kumbra"
-  }
+    companyName: "kumbra",
+  },
 };
 
 interface SendEmailRequest {
@@ -45,40 +53,38 @@ async function sendViaSendGrid(
   cc?: string[],
   bcc?: string[]
 ) {
-  const personalizations = [{
-    to: to.map(email => ({ email })),
-    ...(cc && cc.length > 0 ? { cc: cc.map(email => ({ email })) } : {}),
-    ...(bcc && bcc.length > 0 ? { bcc: bcc.map(email => ({ email })) } : {}),
-  }];
+  const personalizations = [
+    {
+      to: to.map((email) => ({ email })),
+      ...(cc && cc.length > 0 ? { cc: cc.map((email) => ({ email })) } : {}),
+      ...(bcc && bcc.length > 0 ? { bcc: bcc.map((email) => ({ email })) } : {}),
+    },
+  ];
 
   const payload = {
     personalizations,
     from: {
       email: from.email,
-      name: from.name
+      name: from.name,
     },
     subject,
     content: [
       { type: "text/plain", value: bodyText },
-      { type: "text/html", value: bodyHtml }
+      { type: "text/html", value: bodyHtml },
     ],
     tracking_settings: {
-      click_tracking: {
-        enable: false
-      },
-      open_tracking: {
-        enable: false
-      }
-    }
+      click_tracking: { enable: false },
+      open_tracking: { enable: false },
+    },
   };
 
   const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -86,8 +92,7 @@ async function sendViaSendGrid(
     throw new Error(`SendGrid API error: ${response.status} - ${error}`);
   }
 
-  const messageId = response.headers.get("X-Message-Id");
-  return messageId;
+  return response.headers.get("X-Message-Id");
 }
 
 Deno.serve(async (req: Request) => {
@@ -99,8 +104,8 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabaseUrl = getRequiredEnv("SUPABASE_URL");
+    const supabaseServiceKey = getRequiredEnv("SUPABASE_SERVICE_ROLE_KEY");
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const authHeader = req.headers.get("Authorization");
@@ -109,8 +114,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(token);
+
     if (authError || !user) {
       throw new Error("Unauthorized");
     }
@@ -126,14 +134,25 @@ Deno.serve(async (req: Request) => {
     }
 
     const companyName = (profile.companies as any)?.name?.toLowerCase();
-    let config = COMPANY_CONFIGS["sentra"];
-    
+    let config = COMPANY_CONFIGS.sentra;
+
     if (companyName?.includes("kumbra")) {
-      config = COMPANY_CONFIGS["kumbra"];
+      config = COMPANY_CONFIGS.kumbra;
     }
 
     const payload: SendEmailRequest = await req.json();
-    const { to, cc, bcc, subject, bodyText, bodyHtml, contactId, threadId, fromEmail, fromName } = payload;
+    const {
+      to,
+      cc,
+      bcc,
+      subject,
+      bodyText,
+      bodyHtml,
+      contactId,
+      threadId,
+      fromEmail,
+      fromName,
+    } = payload;
 
     if (!to || to.length === 0) {
       throw new Error("At least one recipient is required");
@@ -179,35 +198,35 @@ Deno.serve(async (req: Request) => {
         sendgrid_message_id: messageId,
         user_id: user.id,
         sender_id: null,
-        sent_at: new Date().toISOString()
+        sent_at: new Date().toISOString(),
       })
       .select()
       .single();
 
     if (emailError) {
-      console.error("Failed to store email:", emailError, JSON.stringify(emailError));
-      console.log("Attempted to insert with company_id:", profile.company_id, "user_id:", user.id);
+      console.error("Failed to store email:", emailError);
 
-      await supabase
-        .from('email_sync_status')
-        .upsert({
+      await supabase.from("email_sync_status").upsert(
+        {
           company_id: profile.company_id,
-          sync_type: 'outbound',
+          sync_type: "outbound",
           last_sync_at: new Date().toISOString(),
           last_error_at: new Date().toISOString(),
           last_error_message: emailError.message,
           total_errors: 1,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'company_id,sync_type'
-        });
+          updated_at: new Date().toISOString(),
+        },
+        {
+          onConflict: "company_id,sync_type",
+        }
+      );
 
       throw new Error(`Email was sent via SendGrid but failed to save to database: ${emailError.message}`);
     }
 
-    await supabase.rpc('increment_email_sync_count', {
+    await supabase.rpc("increment_email_sync_count", {
       p_company_id: profile.company_id,
-      p_sync_type: 'outbound'
+      p_sync_type: "outbound",
     });
 
     return new Response(
@@ -215,8 +234,8 @@ Deno.serve(async (req: Request) => {
         success: true,
         message: "Email sent successfully",
         emailId: email?.id,
-        threadId: threadId,
-        messageId
+        threadId,
+        messageId,
       }),
       {
         headers: {
@@ -227,11 +246,11 @@ Deno.serve(async (req: Request) => {
     );
   } catch (error) {
     console.error("Error sending email:", error);
-    
+
     return new Response(
       JSON.stringify({
         success: false,
-        error: error.message || "Failed to send email",
+        error: error instanceof Error ? error.message : "Failed to send email",
       }),
       {
         status: 400,
