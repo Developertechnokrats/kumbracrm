@@ -937,4 +937,4 @@ export default function ApplicationsPage() {
       </Dialog>
     </div>
   );
-}
+}..
